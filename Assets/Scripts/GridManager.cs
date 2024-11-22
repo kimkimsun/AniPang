@@ -11,7 +11,6 @@ public class GridManager : SingleTon<GridManager>
     private GameObject[,]       board;
     private RectTransform       temp;
     private List<Vector2Int>    matchingCoordinates;
-    [SerializeField]
     private Queue<GameObject>   poolingQueue = new Queue<GameObject>();
     private int                 sortIndex;
     private int                 maxIndex;
@@ -291,7 +290,7 @@ public class GridManager : SingleTon<GridManager>
 
         if (count >= 3)
         {
-            Debug.Log(count + "몇이 들어와았니~?");
+            Debug.Log("몇 번 들어옴?"); //이게 2번들어와서 문제가 생기는 듯 호출하는 쪽에서 왜 2번 들어오게 하는지를 한 번 확인해보자.. !!
             indexX = 0;
             indexY = 0;
             gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
