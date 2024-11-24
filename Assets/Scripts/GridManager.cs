@@ -9,24 +9,31 @@ public class GridManager : SingleTon<GridManager>
     public Transform            gridParent; // Grid Layout Group이 있는 부모 오브젝트
     public Sprite[]             sprites;    // 랜덤으로 배치할 스프라이트 배열
     private GameObject[,]       board;
+    private Vector3[,]          boardLocalPos;
     private RectTransform       temp;
-    private List<Vector2Int>    matchingCoordinates;
-    private Queue<GameObject>   poolingQueue = new Queue<GameObject>();
+    private List<Vector2Int>    horizontalMatch;
+    private List<Vector2Int>    verticalMatch;
+    private Queue<GameObject>   poolingQueue;
+    private Vector2Int          firstValueStorage;
     private int                 sortIndex;
     private int                 maxIndex;
     private int                 indexY;
     private int                 indexX;
+    private int                 eraseCount;
 
     void Start()
     {
+        horizontalMatch = new List<Vector2Int>();
+        verticalMatch = new List<Vector2Int>();
+        poolingQueue = new Queue<GameObject>();
         GenerateGrid();
-        matchingCoordinates = new List<Vector2Int>();
     }
+
     void GenerateGrid()
     {
         int gridSize = 8; // 8x8
         board = new GameObject[gridSize, gridSize];
-
+        boardLocalPos = new Vector3[gridSize, gridSize];
         for (int i = 0; i < gridSize; i++)
         {
             for (int j = 0; j < gridSize; j++)
@@ -44,15 +51,26 @@ public class GridManager : SingleTon<GridManager>
                     // 없으면 새로 생성
                     item = Instantiate(itemPrefab, gridParent);
                 }
-
+                item.name = $"새로 생성됨{i},{j}";
                 board[i, j] = item;
 
-                // 스프라이트 랜덤 배치
+                // 스프라이트 랜덤 배치, 연속 타일 방지
                 Image itemImage = item.GetComponent<Image>();
                 if (itemImage != null && sprites.Length > 0)
                 {
-                    itemImage.sprite = sprites[Random.Range(0, sprites.Length)];
+                    Sprite selectedSprite;
+                    do
+                    {
+                        selectedSprite = sprites[Random.Range(0, sprites.Length)];
+                    }
+                    while ((i > 1 && board[i - 1, j].GetComponent<Image>().sprite == selectedSprite
+                                   && board[i - 2, j].GetComponent<Image>().sprite == selectedSprite) || // 세로 검사
+                           (j > 1 && board[i, j - 1].GetComponent<Image>().sprite == selectedSprite
+                                   && board[i, j - 2].GetComponent<Image>().sprite == selectedSprite)); // 가로 검사
+
+                    itemImage.sprite = selectedSprite;
                 }
+                boardLocalPos[i,j] = board[i, j].GetComponent<RectTransform>().localPosition;
             }
         }
     }
@@ -130,23 +148,10 @@ public class GridManager : SingleTon<GridManager>
 
         if (match1 || match2)
         {
-            Debug.Log("터짐");
             puzzle.IsMoved = true;
-            //if (CheckMatch(changeX, changeY))
-            //{
-            //    Debug.Log($"터짐: {changeX}, {changeY}");
-            //    puzzle.IsMoved = true;
-            //}
-            //if (CheckMatch(x, y))
-            //{
-            //    Debug.Log($"터짐: {x}, {y}");
-            //    puzzle.IsMoved = true;
-            //}
         }
         else
         {
-            Debug.Log("안터짐");
-
             // 복귀용 타이머 초기화
             elapsed = 0f;
 
@@ -177,8 +182,10 @@ public class GridManager : SingleTon<GridManager>
         bool[,] visited = new bool[board.GetLength(0), board.GetLength(1)];
 
         // 가로와 세로 카운트 계산
-        matchingCoordinates.Clear();
-        int horizontalCount = DFSHorizontal(startX, startY, targetType, visited, matchingCoordinates);
+        horizontalMatch.Clear();
+        indexX = -1;
+        indexY = 999;
+        int horizontalCount = DFSHorizontal(startX, startY, targetType, visited, horizontalMatch);
         for (int i = 0; i < visited.GetLength(0); i++)
         {
             for (int j = 0; j < visited.GetLength(1); j++)
@@ -186,29 +193,179 @@ public class GridManager : SingleTon<GridManager>
                 visited[i, j] = false;
             }
         } // 방문 배열 초기화
-        matchingCoordinates.Clear();
-        int verticalCount = DFSVertical(startX, startY, targetType, visited, matchingCoordinates);
+        verticalMatch.Clear();
+        indexX = -1;
+        indexY = 999;
+        int verticalCount = DFSVertical(startX, startY, targetType, visited, verticalMatch);
 
-        Debug.Log("가로 : " + horizontalCount + ", 세로 : " + verticalCount);
-        if (horizontalCount >= 3)
+
+
+
+
+
+
+        if (horizontalCount >= 5)
         {
-            Debug.Log("가로 매치: " + horizontalCount);
+            firstValueStorage = horizontalMatch[0];
+            horizontalMatch.RemoveAt(0);
+            gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
+            foreach (Vector2Int coord in horizontalMatch)
+            {
+                indexX = coord.x;
+                if (indexY >= coord.y) indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                Debug.Log("들어올 때" + poolingQueue.Count);
+                // 기존의 것들을 부숩니다.
+            }
+            board[firstValueStorage.x, firstValueStorage.y].GetComponent<Image>().color = Color.red;
+            FillBoard();
+            horizontalMatch.Clear();
             return true;
         }
-        if (verticalCount >= 3)
+
+
+
+
+
+
+
+        else if (verticalCount >= 5)
         {
-            Debug.Log("세로 매치: " + verticalCount);
+            firstValueStorage = verticalMatch[0];
+            verticalMatch.RemoveAt(0);
+            foreach (Vector2Int coord in verticalMatch)
+            {
+                // 첫번째로 뽑히는 놈을 찾았다. Debug.Log("첫번째" + coord.x);
+                if (indexX <= coord.x) indexX = coord.x;
+                indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                // 기존의 것들을 부숩니다.
+            }
+            board[firstValueStorage.x, firstValueStorage.y].GetComponent<Image>().color = Color.red;
+            FillBoard();
+            verticalMatch.Clear(); // 매칭된 좌표들 초기화
             return true;
         }
-        if (horizontalCount < 3 && verticalCount < 3)
+
+
+
+
+
+
+
+
+
+        else if (verticalCount >= 3 && horizontalCount >= 3)
         {
-            return false;
+            gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
+            firstValueStorage = horizontalMatch[0];
+            horizontalMatch.RemoveAt(0);
+            foreach (Vector2Int coord in horizontalMatch)
+            {
+                indexX = coord.x;
+                if (indexY >= coord.y) indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                // 기존의 것들을 부숩니다.
+            }
+            board[firstValueStorage.x, firstValueStorage.y].GetComponent<Image>().color = Color.green;
+            Debug.Log("xxxx : " + firstValueStorage.x + "yyyyy : " + firstValueStorage.y);
+            for (int i = 0; i < horizontalMatch.Count; i++)
+            {
+                int tempIndex = indexX;
+                while (tempIndex > 0)
+                {
+                    if (firstValueStorage.y == indexY) indexY++;
+                    board[tempIndex, indexY] = board[tempIndex - 1, indexY];
+                    tempIndex--;
+                }
+                Vector3 newPosition = board[0, indexY].GetComponent<RectTransform>().localPosition;
+                newPosition.y += 151;
+                board[0, indexY] = poolingQueue.Dequeue();
+                board[0, indexY].SetActive(true);
+                board[0, indexY].GetComponent<RectTransform>().localPosition = newPosition;
+                board[0, indexY].GetComponent<Image>().sprite = sprites[Random.Range(0, sprites.Length)];
+                indexY++;
+            }
+            horizontalMatch.Clear();
+            firstValueStorage = verticalMatch[0];
+            verticalMatch.RemoveAt(0);
+            indexX = -1;
+            indexY = 999;
+            foreach (Vector2Int coord in verticalMatch)
+            {
+                if (indexX <= coord.x) indexX = coord.x;
+                indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                // 기존의 것들을 부숩니다.
+            }
+            FillBoard();
+            verticalMatch.Clear(); // 매칭된 좌표들 초기화
+            return true;
         }
+        else if (verticalCount >= 4)
+        {
+            return true;
+        }
+
+        else if (horizontalCount >= 4)
+        {
+            return true;
+        }
+
+        else if (horizontalCount >= 3)
+        {
+            gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
+            foreach (Vector2Int coord in horizontalMatch)
+            {
+                indexX = coord.x;
+                if (indexY >= coord.y) indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                // 기존의 것들을 부숩니다.
+            }
+            FillBoard();
+            horizontalMatch.Clear();
+            return true;
+        }
+        #region 세로 터트리는 if문
+        else if (verticalCount >= 3)
+        {
+            foreach (Vector2Int coord in verticalMatch)
+            {
+            // 첫번째로 뽑히는 놈을 찾았다. Debug.Log("첫번째" + coord.x);
+                if (indexX <= coord.x) indexX = coord.x;
+                indexY = coord.y;
+                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
+                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
+                board[coord.x, coord.y].gameObject.SetActive(false);
+                poolingQueue.Enqueue(board[coord.x, coord.y]);
+                // 기존의 것들을 부숩니다.
+            }
+            FillBoard();
+            verticalMatch.Clear(); // 매칭된 좌표들 초기화
+            return true;
+        }
+        #endregion
         else
         {
             return false;
         }
     }
+    #region 가로 터지는 거 체크 함수
     private int DFSHorizontal(int x, int y, string targetType, bool[,] visited, List<Vector2Int> matchingCoordinates)
     {
         if (x < 0 || x >= board.GetLength(0) || y < 0 || y >= board.GetLength(1)) return 0; // 범위 초과
@@ -218,63 +375,13 @@ public class GridManager : SingleTon<GridManager>
         visited[x, y] = true;
         int count = 1;
         matchingCoordinates.Add(new Vector2Int(x, y));
-
         count += DFSHorizontal(x, y - 1, targetType, visited, matchingCoordinates);
         count += DFSHorizontal(x, y + 1, targetType, visited, matchingCoordinates);
-        if(count >= 3)
-        {
-            Debug.Log("여기 몇 번 들어옴?");
-            indexX = 0;
-            indexY = 10;
-            gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
-            foreach (Vector2Int coord in matchingCoordinates)
-            {
-                indexX = coord.x;
-                if (indexY >= coord.y) indexY = coord.y;
-                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
-                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
-                Destroy(board[coord.x, coord.y]);
-                board[coord.x, coord.y] = null;
-                // 기존의 것들을 부숩니다.
-            }
-            //for(int i = 0; i < maxIndex; i++)
-            //{
-            //    board[maxIndex - i, indexY] = board[maxIndex - 1, indexY];
-            //}
-            for (int i = 0; i < count; i++)
-            {
-                Debug.Log("카운트 !!!!!!!!!!!!!!!!!!" + count);
-                int tempIndex = indexX;
-                while (tempIndex > 0)
-                {
-                    board[tempIndex, indexY] = board[tempIndex - 1, indexY];
-                    tempIndex--;
-                }
-                // 일단 item을 만듭니다.
-                GameObject item = Instantiate(itemPrefab, gridParent);
-                // 어디든 상관없이 고정된 위치에 됩니다..
-                RectTransform rectTransform = item.GetComponent<RectTransform>();
-                Debug.Log(indexY + "너 뭔데 자꾸 하..");
-                Vector3 newPosition = board[0, indexY].GetComponent<RectTransform>().localPosition;
-                newPosition.y += 151; // 높이 조정 (151은 블록 간 거리)
-                rectTransform.localPosition = newPosition;
-                board[0, indexY] = item;
-                // 기존 블록의 위치 기반으로 새 위치 설정
-                Debug.Log("호출");
-                item.gameObject.name = "새로 생성됨";
-                Image itemImage = item.GetComponent<Image>();
-                if (itemImage != null && sprites.Length > 0)
-                {
-                    itemImage.sprite = sprites[Random.Range(0, sprites.Length)];
-                }
-                indexY++;
-            }
-
-            matchingCoordinates.Clear();
-        }
+        gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
         return count;
     }
-
+    #endregion
+    #region 세로 터지는 거 체크 함수
     private int DFSVertical(int x, int y, string targetType, bool[,] visited, List<Vector2Int> matchingCoordinates)
     {
         if (x < 0 || x >= board.GetLength(0) || y < 0 || y >= board.GetLength(1)) return 0; // 범위 초과
@@ -287,68 +394,107 @@ public class GridManager : SingleTon<GridManager>
         matchingCoordinates.Add(new Vector2Int(x, y));
         count += DFSVertical(x - 1, y, targetType, visited, matchingCoordinates);
         count += DFSVertical(x + 1, y, targetType, visited, matchingCoordinates);
+        gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
+        return count;
+    }
+    #endregion
+    #region 디버깅 함수
 
-        if (count >= 3)
+    private void FillBoard()
+    {
+        int index;
+        bool nothing;
+        for (int i = board.GetLength(0)-1; i >= 0; i--)
         {
-            Debug.Log("몇 번 들어옴?"); //이게 2번들어와서 문제가 생기는 듯 호출하는 쪽에서 왜 2번 들어오게 하는지를 한 번 확인해보자.. !!
-            indexX = 0;
-            indexY = 0;
-            gridParent.GetComponent<GridLayoutGroup>().enabled = false; // 레이아웃 갱신 일시 비활성화
-            //세로 매칭이 3개이상 돼서 터지게 된다면
-            foreach (Vector2Int coord in matchingCoordinates)
+            for (int j = board.GetLength(1)-1; j >= 0; j--)
             {
-                if (indexX <= coord.x) indexX = coord.x;
-                indexY = coord.y;
-                // 부셔져야 하는 좌표를 구해서 coord라는 변수에 넣어 놓는다.
-                // 그리고 부셔져야 되는 놈들을 부순다. <-- 이건 추후에 SetActive로 조절할 예정
-                board[coord.x, coord.y].gameObject.SetActive(false);
-                poolingQueue.Enqueue(board[coord.x, coord.y]);
-                Debug.Log(poolingQueue.Count);
-                // 기존의 것들을 부숩니다.
-            }
-            for (int i = 0; i < count; i++)
-            {
-                int tempIndex = indexX;
-                while (tempIndex > 0)
+                if (!(board[j, i].activeSelf))
                 {
-                    board[tempIndex, indexY] = board[tempIndex - 1, indexY];
-                    tempIndex--;
-                }
-                Debug.Log("몇번째때 Empty인건데" + i);
-                    board[0, indexY] = poolingQueue.Dequeue();
-                    board[0, indexY].SetActive(true);
-
-                // 일단 item을 만듭니다.
-                //GameObject item = Instantiate(itemPrefab, gridParent);
-                //// 어디든 상관없이 고정된 위치에 됩니다..
-                //RectTransform rectTransform = item.GetComponent<RectTransform>();
-                //Vector3 newPosition = board[0, indexY].GetComponent<RectTransform>().localPosition;
-                ////없는데 그러라고 하니까 못하는 거지 뭐 setactive를 지금이라도 해야되나?
-                //newPosition.y += 151; // 높이 조정 (151은 블록 간 거리)
-                //rectTransform.localPosition = newPosition;
-                //board[0, indexY] = item;
-                //// 기존 블록의 위치 기반으로 새 위치 설정
-                //Debug.Log("호출");
-                //item.gameObject.name = "새로 생성됨";
-                //Image itemImage = item.GetComponent<Image>();
-                //if (itemImage != null && sprites.Length > 0)
-                //{
-                //    itemImage.sprite = sprites[Random.Range(0, sprites.Length)];
-                //}
-            }
-            for (int i = 0; i < board.GetLength(0); i++)
-            {
-                for (int j = 0; j < board.GetLength(1); j++)
-                {
-                    if (board[i, j] != null && !board[i, j].activeSelf)
+                    index = j - 1;
+                    nothing = false;
+                    while (index >= 0)
                     {
-                        Debug.Log($"찾았다 이놈! 위치: {i}, {j}");
-                        // 여기서 재활용 로직 추가 가능
+                        if (board[index, j].activeSelf)
+                        {
+                            GameObject temp = board[index, j];
+                            board[index, j] = board[j ,i];
+                            board[j, i] = temp;
+                            board[j, i].SetActive(false);
+                            eraseCount++;
+                            nothing = true;
+                            break;
+                        }
+                        index--;
+                    }
+                    if(!nothing)
+                    {
+                        board[j,i] = poolingQueue.Dequeue();
+                        board[j,i].SetActive(true);
                     }
                 }
             }
-            matchingCoordinates.Clear(); // 매칭된 좌표들 초기화
         }
-        return count;
     }
+                        //        board[i, j].SetActive(true);
+                        //        board[i, j] = board[index, j];
+                        //        board[index,j].SetActive(false);
+                        //        ChangePos(board[index, j], boardLocalPos[index,j]);
+                        //        nothing = true;
+                        //        break;
+                        //    }
+                        //    index--;
+                        //}
+                        //if(!nothing)
+                        //{
+                        //    board[i,j] = poolingQueue.Dequeue();
+                        //    board[i, j].SetActive(true);
+                        //    board[i, j].GetComponent<RectTransform>().localPosition = boardLocalPos[0, j];
+                        //    board[i, j].GetComponent<Image>().sprite = sprites[Random.Range(0, sprites.Length)];
+                        //    indexY++;
+                        //}
+
+    private void ChangePos(GameObject rect1, Vector3 arrivePos)
+    {
+        RectTransform startPos = rect1.GetComponent<RectTransform>();
+        float duration = 0.1f; // 이동 시간
+        float elapsed = 0f;
+        Vector3 startPosition = startPos.position;
+        // 애니메이션 재생
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            // 위치 보간
+            startPos.position = Vector3.Lerp(startPosition, arrivePos, t);
+        }
+    }
+
+
+
+    
+
+private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.E))
+        {
+            Debug.Log(poolingQueue.Count);
+        }
+        if (Input.GetKeyDown(KeyCode.W))
+        {
+            for (int i = 0; i < poolingQueue.Count; i++)
+            {
+                GameObject item = poolingQueue.Dequeue();
+                Debug.Log(item.name);
+            }
+        }
+        if (Input.GetKeyDown(KeyCode.A))
+        {
+            Debug.Log(verticalMatch.Count);
+        }
+        if (Input.GetKeyDown(KeyCode.S))
+        {
+            Debug.Log(horizontalMatch.Count);
+        }
+    }
+    #endregion
 }
